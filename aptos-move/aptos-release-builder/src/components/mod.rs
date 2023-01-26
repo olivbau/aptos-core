@@ -125,11 +125,11 @@ impl ReleaseConfig {
         _client: &Option<Client>,
         result: &mut Vec<(String, String)>,
     ) -> Result<()> {
-        if let Some(framework_release) = self.framework_release {
+        if let Some(framework_release) = &self.framework_release {
             result.append(
                 &mut framework::generate_upgrade_proposals(
-                    self.testnet,
                     framework_release,
+                    self.testnet,
                     if self.is_multi_step {
                         get_execution_hash(result)
                     } else {
