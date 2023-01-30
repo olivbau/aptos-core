@@ -22,6 +22,7 @@ use reqwest::{header::CONTENT_ENCODING, RequestBuilder, Response, StatusCode};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use std::{io::Write, sync::Arc};
+use uuid::Uuid;
 
 struct AuthContext {
     noise_config: Option<NoiseConfig>,
@@ -48,6 +49,7 @@ pub(crate) struct TelemetrySender {
     inner_client: reqwest::Client,
     client: ClientWithMiddleware,
     auth_context: Arc<AuthContext>,
+    uuid: Uuid,
 }
 
 impl TelemetrySender {
@@ -69,6 +71,7 @@ impl TelemetrySender {
             inner_client,
             client,
             auth_context: Arc::new(AuthContext::new(node_config)),
+            uuid: uuid::Uuid::new_v4(),
         }
     }
 
@@ -302,6 +305,7 @@ impl TelemetrySender {
             role_type: self.role_type,
             server_public_key,
             handshake_msg: client_noise_msg,
+            run_uuid: self.uuid,
         };
 
         let response = self
