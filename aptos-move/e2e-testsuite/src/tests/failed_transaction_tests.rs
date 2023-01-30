@@ -1,6 +1,7 @@
 // Copyright (c) Aptos
 // SPDX-License-Identifier: Apache-2.0
 
+use aptos_buffered_logger::AdapterLogSchema;
 use aptos_gas::{
     AptosGasMeter, AptosGasParameters, StorageGasParameters, LATEST_GAS_FEATURE_VERSION,
 };
@@ -10,10 +11,7 @@ use aptos_types::{
     transaction::ExecutionStatus,
     vm_status::{StatusCode, VMStatus},
 };
-use aptos_vm::{
-    data_cache::AsMoveResolver, logging::AdapterLogSchema,
-    transaction_metadata::TransactionMetadata, AptosVM,
-};
+use aptos_vm::{data_cache::AsMoveResolver, transaction_metadata::TransactionMetadata, AptosVM};
 use move_core_types::vm_status::StatusCode::TYPE_MISMATCH;
 
 #[test]

@@ -11,7 +11,6 @@ use crate::{
     data_cache::{AsMoveResolver, IntoMoveResolver},
     delta_state_view::DeltaStateView,
     errors::expect_only_successful_execution,
-    logging::AdapterLogSchema,
     move_vm_ext::{MoveResolverExt, SessionExt, SessionId},
     system_module_names::*,
     transaction_metadata::TransactionMetadata,
@@ -22,6 +21,7 @@ use aptos_aggregator::{
     delta_change_set::DeltaChangeSet,
     transaction::{ChangeSetExt, TransactionOutputExt},
 };
+use aptos_buffered_logger::AdapterLogSchema;
 use aptos_crypto::HashValue;
 use aptos_framework::natives::code::PublishRequest;
 use aptos_gas::{AptosGasMeter, ChangeSetConfigs};

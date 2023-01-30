@@ -179,6 +179,7 @@ aptos-backup-service = { path = "storage/backup/backup-service" }
 aptos-bounded-executor = { path = "crates/bounded-executor" }
 aptos-block-executor = { path = "aptos-move/block-executor" }
 aptos-bitvec = { path = "crates/aptos-bitvec" }
+aptos-buffered-logger = { path = "aptos-move/buffered-logger" }
 aptos-build-info = { path = "crates/aptos-build-info" }
 aptos-cached-packages = { path = "aptos-move/framework/cached-packages" }
 aptos-channels = { path = "crates/channel" }

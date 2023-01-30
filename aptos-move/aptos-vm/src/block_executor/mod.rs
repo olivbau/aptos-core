@@ -21,6 +21,7 @@ use aptos_block_executor::{
         TransactionOutput as BlockExecutorTransactionOutput,
     },
 };
+use aptos_buffered_logger::flush_logs;
 use aptos_state_view::StateView;
 use aptos_types::{
     state_store::state_key::StateKey,
@@ -123,6 +124,9 @@ impl BlockAptosVM {
                         .collect()
                 })
             });
+
+        // Clear the buffered logs and asynchronously flush them.
+        flush_logs();
 
         match ret {
             Ok(outputs) => Ok(outputs),

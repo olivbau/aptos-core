@@ -418,6 +418,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aptos-aggregator",
+ "aptos-buffered-logger",
  "aptos-infallible",
  "aptos-logger",
  "aptos-metrics-core",
@@ -447,6 +448,23 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "tokio",
+]
+
+[[package]]
+name = "aptos-buffered-logger"
+version = "0.1.0"
+dependencies = [
+ "aptos-crypto",
+ "aptos-infallible",
+ "aptos-logger",
+ "aptos-metrics-core",
+ "aptos-state-view",
+ "aptos-types",
+ "arc-swap",
+ "crossbeam",
+ "once_cell",
+ "rayon",
+ "serde 1.0.149",
 ]
 
 [[package]]
@@ -2691,6 +2709,7 @@ dependencies = [
  "anyhow",
  "aptos-aggregator",
  "aptos-block-executor",
+ "aptos-buffered-logger",
  "aptos-crypto",
  "aptos-crypto-derive",
  "aptos-framework",
@@ -5915,6 +5934,7 @@ name = "language-e2e-testsuite"
 version = "0.1.0"
 dependencies = [
  "aptos-block-executor",
+ "aptos-buffered-logger",
  "aptos-cached-packages",
  "aptos-crypto",
  "aptos-framework",
