@@ -67,6 +67,14 @@ where
         }
     }
 
+    fn save_min_readable_version(
+        &self,
+        version: Version,
+        batch: &SchemaBatch,
+    ) -> anyhow::Result<()> {
+        batch.put::<DbMetadataSchema>(&S::tag(), &DbMetadataValue::Version(version))
+    }
+
     fn initialize_min_readable_version(&self) -> Result<Version> {
         Ok(self
             .state_merkle_db
@@ -154,10 +162,7 @@ where
                     batch.delete::<S>(&index)
                 })?;
 
-                batch.put::<DbMetadataSchema>(
-                    &S::tag(),
-                    &DbMetadataValue::Version(new_min_readable_version),
-                )?;
+                self.save_min_readable_version(new_min_readable_version, &batch)?;
 
                 // Commit to DB.
                 self.state_merkle_db.write_schemas(batch)?;
