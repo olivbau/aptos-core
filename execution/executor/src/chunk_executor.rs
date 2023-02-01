@@ -17,8 +17,8 @@ use crate::{
 };
 use anyhow::Result;
 use aptos_executor_types::{
-    ChunkCommitNotification, ChunkExecutorTrait, ExecutedChunk, TransactionReplayer,
-    VerifyExecutionMode,
+    ChunkCommitNotification, ChunkExecutorTrait, ExecutedChunk, ParsedTransactionOutput,
+    TransactionReplayer, VerifyExecutionMode,
 };
 use aptos_infallible::{Mutex, RwLock};
 use aptos_logger::prelude::*;
@@ -38,7 +38,8 @@ use aptos_types::{
 };
 use aptos_vm::VMExecutor;
 use fail::fail_point;
-use std::{marker::PhantomData, sync::Arc};
+use itertools::multizip;
+use std::{iter::once, marker::PhantomData, sync::Arc};
 
 pub struct ChunkExecutor<V> {
     db: DbReaderWriter,
@@ -386,43 +387,62 @@ impl<V: VMExecutor> TransactionReplayer for ChunkExecutorInner<V> {
         &self,
         mut transactions: Vec<Transaction>,
         mut transaction_infos: Vec<TransactionInfo>,
-        writesets: Vec<WriteSet>,
-        events: Vec<Vec<ContractEvent>>,
+        mut write_sets: Vec<WriteSet>,
+        mut events_vec: Vec<Vec<ContractEvent>>,
         verify_execution_mode: VerifyExecutionMode,
     ) -> Result<()> {
         let (_parent_view, latest_view) = self.commit_queue.lock().persisted_and_latest_view();
-        let first_version = latest_view.num_transactions() as Version;
-        let mut offset = first_version;
-        let total_length = transactions.len();
+        let start_version = latest_view.num_transactions() as Version;
+        let end_version = start_version + transactions.len() as Version; // right-exclusive
 
-        for version in verify_execution_mode
-            .txns_to_skip()
-            .range(first_version..first_version + total_length as u64)
-        {
-            let version = *version;
-            let remaining = transactions.split_off((version - offset + 1) as usize);
-            let remaining_info = transaction_infos.split_off((version - offset + 1) as usize);
-            let txn_to_skip = transactions.pop().unwrap();
-            let txn_info = transaction_infos.pop().unwrap();
+        // we try to apply the txns in sub-batches split by known txns to skip and the end of the batch
+        let txns_to_skip = verify_execution_mode.txns_to_skip();
+        let mut batch_ends = txns_to_skip
+            .range(start_version..end_version)
+            .chain(once(&end_version));
 
-            self.replay_impl(transactions, transaction_infos)?;
+        let mut batch_start = start_version;
+        let mut batch_end = *batch_ends.next().unwrap();
+        while batch_start < end_version {
+            if batch_start == batch_end {
+                // batch_end is a known broken version that won't pass execution verification
+                self.remove_and_apply(
+                    &mut transactions,
+                    &mut transaction_infos,
+                    &mut write_sets,
+                    &mut events_vec,
+                    batch_start,
+                    batch_start + 1,
+                )?;
+                batch_start += 1;
+                batch_end = *batch_ends.next().unwrap();
+                continue;
+            }
 
-            self.apply_transaction_and_output(
-                txn_to_skip,
-                TransactionOutput::new(
-                    writesets[(version - first_version) as usize].clone(),
-                    events[(version - first_version) as usize].clone(),
-                    txn_info.gas_used(),
-                    TransactionStatus::Keep(txn_info.status().clone()),
-                ),
-                txn_info,
+            let next_start = if verify_execution_mode.should_verify() {
+                self.verify_execution(
+                    &transactions,
+                    &transaction_infos,
+                    &write_sets,
+                    &events_vec,
+                    batch_start,
+                    batch_end,
+                )?
+            } else {
+                batch_end
+            };
+            self.remove_and_apply(
+                &mut transactions,
+                &mut transaction_infos,
+                &mut write_sets,
+                &mut events_vec,
+                batch_start,
+                next_start,
             )?;
-
-            transactions = remaining;
-            transaction_infos = remaining_info;
-            offset = version + 1;
+            batch_start = next_start;
         }
-        self.replay_impl(transactions, transaction_infos)
+
+        Ok(())
     }
 
     fn commit(&self) -> Result<Arc<ExecutedChunk>> {
@@ -431,66 +451,92 @@ impl<V: VMExecutor> TransactionReplayer for ChunkExecutorInner<V> {
 }
 
 impl<V: VMExecutor> ChunkExecutorInner<V> {
-    fn replay_impl(
+    fn verify_execution(
         &self,
-        transactions: Vec<Transaction>,
-        mut transaction_infos: Vec<TransactionInfo>,
-    ) -> Result<()> {
-        let (_persisted_view, mut latest_view) =
-            self.commit_queue.lock().persisted_and_latest_view();
+        transactions: &[Transaction],
+        transaction_infos: &[TransactionInfo],
+        writesets: &[WriteSet],
+        events_vec: &[Vec<ContractEvent>],
+        begin: Version,
+        end: Version,
+    ) -> Result<Version> {
+        let (_persisted_view, latest_view) = self.commit_queue.lock().persisted_and_latest_view();
 
-        let mut executed_chunk = ExecutedChunk::default();
-        let mut to_run = Some(transactions);
+        // Execute transactions.
+        let state_view = self.state_view(&latest_view)?;
+        let txns = transactions
+            .iter()
+            .take((end - begin) as usize)
+            .cloned()
+            .collect();
 
-        while !to_run.as_ref().unwrap().is_empty() {
-            // Execute transactions.
-            let state_view = self.state_view(&latest_view)?;
-            let txns = to_run.take().unwrap();
-            let chunk_output = ChunkOutput::by_transaction_execution::<V>(txns, state_view)?;
+        let chunk_output = ChunkOutput::by_transaction_execution::<V>(txns, state_view)?;
+        // not `zip_eq`, deliberately
+        for (version, txn_out, txn_info, write_set, events) in multizip((
+            begin..end,
+            chunk_output.transaction_outputs.iter(),
+            transaction_infos.iter(),
+            writesets.iter(),
+            events_vec.iter(),
+        )) {
+            txn_out.ensure_match_transaction_info(
+                version,
+                txn_info,
+                Some(write_set),
+                Some(events),
+            )?;
 
-            let (executed, to_discard, to_retry) = chunk_output.apply_to_ledger(&latest_view)?;
-
-            // Accumulate result and deal with retry
-            ensure_no_discard(to_discard)?;
-            let n = executed.to_commit.len();
-            executed.ensure_transaction_infos_match(&transaction_infos[..n])?;
-            transaction_infos.drain(..n);
-
-            to_run = Some(to_retry);
-            executed_chunk = executed_chunk.combine(executed)?;
-            latest_view = executed_chunk.result_view.clone();
+            if ParsedTransactionOutput::parse_reconfig_events(txn_out)
+                .next()
+                .is_some()
+            {
+                return Ok(version + 1);
+            }
         }
+        Ok(end)
+    }
+
+    fn remove_and_apply(
+        &self,
+        txns: &mut Vec<Transaction>,
+        txn_infos: &mut Vec<TransactionInfo>,
+        write_sets: &mut Vec<WriteSet>,
+        event_vecs: &mut Vec<Vec<ContractEvent>>,
+        start: Version,
+        end: Version,
+    ) -> Result<()> {
+        let num_txns = (end - start) as usize;
+        let txn_infos: Vec<_> = txn_infos.drain(..num_txns).collect();
+        let txns_and_outputs = multizip((
+            txns.drain(..num_txns),
+            txn_infos.iter(),
+            write_sets.drain(..num_txns),
+            event_vecs.drain(..num_txns),
+        ))
+        .map(|(txn, txn_info, write_set, events)| {
+            (
+                txn,
+                TransactionOutput::new(
+                    write_set,
+                    events,
+                    txn_info.gas_used(),
+                    TransactionStatus::Keep(txn_info.status().clone()),
+                ),
+            )
+        })
+        .collect();
+
+        let (_persisted_view, latest_view) = self.commit_queue.lock().persisted_and_latest_view();
+        let state_view = self.state_view(&latest_view)?;
+        let chunk_output = ChunkOutput::by_transaction_output(txns_and_outputs, state_view)?;
+        let (executed_chunk, to_discard, to_retry) = chunk_output.apply_to_ledger(&latest_view)?;
+        ensure_no_discard(to_discard)?;
+        ensure_no_retry(to_retry)?;
+        executed_chunk.ensure_transaction_infos_match(&txn_infos)?;
 
         // Add result to commit queue.
         self.commit_queue.lock().enqueue(executed_chunk);
 
-        Ok(())
-    }
-
-    fn apply_transaction_and_output(
-        &self,
-        txn: Transaction,
-        output: TransactionOutput,
-        expected_info: TransactionInfo,
-    ) -> Result<()> {
-        let (_persisted_view, latest_view) = self.commit_queue.lock().persisted_and_latest_view();
-
-        info!(
-            "Overiding the output of txn at version: {:?}",
-            latest_view.version().map_or(0, |v| v + 1),
-        );
-
-        let chunk_output = ChunkOutput::by_transaction_output(
-            vec![(txn, output)],
-            self.state_view(&latest_view)?,
-        )?;
-
-        let (executed, to_discard, _to_retry) = chunk_output.apply_to_ledger(&latest_view)?;
-
-        // Accumulate result and deal with retry
-        ensure_no_discard(to_discard)?;
-        executed.ensure_transaction_infos_match(&vec![expected_info])?;
-        self.commit_queue.lock().enqueue(executed);
         Ok(())
     }
 }

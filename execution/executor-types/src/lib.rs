@@ -146,6 +146,10 @@ impl VerifyExecutionMode {
             VerifyExecutionMode::Verify { txns_to_skip } => txns_to_skip.clone(),
         }
     }
+
+    pub fn should_verify(&self) -> bool {
+        !matches!(self, Self::NoVerify)
+    }
 }
 
 pub trait TransactionReplayer: Send {
